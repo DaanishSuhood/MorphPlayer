@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\MorphPlayer.ico</ApplicationIcon>
+    <Product>MorphPlayer</Product>
+    <Description>Windows media player in C#/WPF on LibVLC</Description>
+    <Authors>Daanish Suhood</Authors>
+    <Copyright>Copyright (c) 2026 Daanish Suhood</Copyright>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <!-- A release build for one runtime (publish.ps1 uses win-x64) only needs that architecture's copy
+       of LibVLC, not all three. Plain builds keep all of them so any platform can run from source. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\MorphPlayer.ico" />
+  </ItemGroup>
+
+  <!-- In a single-file publish, keep LibVLC out of the exe: it loads its plugins from libvlc\<arch>\plugins
+       on disk and must sit beside them. The LibVLC package adds its files as Content in this target. -->
+  <Target Name="KeepLibVlcOutOfSingleFile" AfterTargets="CollectVlcFilesToCopyWindows">
+    <ItemGroup>
+      <Content Condition="$([System.String]::Copy('%(Content.Link)').StartsWith('libvlc'))">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.10.2" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
+  </ItemGroup>
+
+</Project>

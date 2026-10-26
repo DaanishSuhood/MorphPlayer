@@ -1,0 +1,13 @@
+# Build output - published as a GitHub Release instead
+bin/
+obj/
+publish/
+
+# IDE state
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Release builds and the cached VLC download (publish.ps1)
+artifacts/
