@@ -30,7 +30,8 @@ public sealed class UrlDialog : Window
         buttons.Children.Add(cancel);
 
         var root = new StackPanel { Margin = new Thickness(16) };
-        root.Children.Add(new TextBlock { Text = "Enter a network URL (e.g. https://…, rtsp://…, udp://@:1234):" });
+        root.Children.Add(new TextBlock { Text = "Enter a network URL (e.g. https://…, rtsp://…, udp://@:1234),\n"
+                                                 + "or a web page such as a YouTube video:" });
         root.Children.Add(_box);
         root.Children.Add(buttons);
         Content = root;

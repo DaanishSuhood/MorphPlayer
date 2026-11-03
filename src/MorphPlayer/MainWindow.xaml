@@ -19,7 +19,7 @@
                   MouseLeftButtonDown="Overlay_MouseLeftButtonDown" MouseWheel="Overlay_MouseWheel"
                   Loaded="Overlay_Loaded">
                 <Grid.ContextMenu>
-                    <!-- The track, subtitle, device and stereo submenus are filled in OverlayMenu_Opened. -->
+                    <!-- The track, subtitle, device, stereo, quality and updates submenus are filled in OverlayMenu_Opened. -->
                     <ContextMenu Opened="OverlayMenu_Opened" Closed="Menu_Closed">
                         <MenuItem Header="Open File(s)…" InputGestureText="Ctrl+O" Click="OpenFiles_Click"/>
                         <MenuItem Header="Open Folder…" InputGestureText="Ctrl+F" Click="OpenFolder_Click"/>
@@ -30,9 +30,12 @@
                         <Separator/>
                         <MenuItem x:Name="AudioDeviceMenu" Header="Audio Device"/>
                         <MenuItem x:Name="StereoModeMenu" Header="Stereo Mode"/>
+                        <MenuItem x:Name="QualityMenu" Header="Website Video Quality"/>
                         <Separator/>
                         <MenuItem Header="Playlist" InputGestureText="Ctrl+L" Click="Playlist_Click"/>
                         <MenuItem Header="Fullscreen" InputGestureText="F" Click="Fullscreen_Click"/>
+                        <Separator/>
+                        <MenuItem x:Name="UpdatesMenu" Header="Updates"/>
                     </ContextMenu>
                 </Grid.ContextMenu>
                 <StackPanel x:Name="Hint" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
@@ -40,7 +43,7 @@
                                Foreground="{StaticResource Accent}" HorizontalAlignment="Center"/>
                     <TextBlock Text="Drop media files here" FontSize="18" Foreground="{StaticResource Fg}"
                                HorizontalAlignment="Center" Margin="0,16,0,4"/>
-                    <TextBlock Text="or press Ctrl+O to open · Ctrl+N for a network stream" FontSize="13"
+                    <TextBlock Text="or press Ctrl+O to open · Ctrl+N for a stream or YouTube link" FontSize="13"
                                Foreground="{StaticResource FgDim}" HorizontalAlignment="Center"/>
                 </StackPanel>
 
@@ -73,10 +76,38 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Asks before fetching yt-dlp, the first time a web page is opened; see AskToGetYtDlp -->
+                <Border x:Name="YtDlpPrompt" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Margin="24,24,24,110" MaxWidth="500" Background="#E0181818" CornerRadius="6" Padding="18,14,10,8">
+                    <StackPanel>
+                        <TextBlock Text="Play website links with yt-dlp?" Foreground="{StaticResource Fg}" FontSize="16"
+                                   FontWeight="SemiBold"/>
+                        <TextBlock Foreground="{StaticResource FgDim}" FontSize="13" TextWrapping="Wrap" Margin="0,6,8,6"
+                                   Text="To play YouTube and other website links, MorphPlayer needs yt-dlp, plus Deno, which yt-dlp uses for YouTube. It can download both from GitHub now (about 65 MB) and keep yt-dlp up to date. If not, it tries the link on its own, and you can get yt-dlp later under Updates in the right-click menu."/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Style="{StaticResource TextButton}" Content="Not now" Height="30" Click="DeclineYtDlp_Click"/>
+                            <Button Style="{StaticResource TextButton}" Content="Download" Foreground="{StaticResource Accent}"
+                                    Height="30" Margin="6,0,0,0" Click="AcceptYtDlp_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Shown for a while at start-up when GitHub has a newer release -->
+                <Border x:Name="UpdateBanner" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="16" Background="#E0181818" CornerRadius="6" Padding="14,4,4,4">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="UpdateText" Foreground="{StaticResource Fg}" FontSize="14" VerticalAlignment="Center"/>
+                        <Button x:Name="UpdateButton" Style="{StaticResource TextButton}" Content="Update" Foreground="{StaticResource Accent}"
+                                Height="30" Margin="10,0,0,0" Click="DownloadUpdate_Click"/>
+                        <Button Style="{StaticResource IconButton}" Content="&#xE711;" FontSize="11" Height="30" MinWidth="30"
+                                ToolTip="Don't show this again until the next version" Click="DismissUpdate_Click"/>
+                    </StackPanel>
+                </Border>
+
                 <Border x:Name="OsdBorder" Visibility="Collapsed" IsHitTestVisible="False"
                         HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16"
                         Background="#B0000000" CornerRadius="4" Padding="12,6">
-                    <TextBlock x:Name="OsdText" Foreground="White" FontSize="16"/>
+                    <TextBlock x:Name="OsdText" Foreground="White" FontSize="16" TextWrapping="Wrap" MaxWidth="560"/>
                 </Border>
 
                 <Border x:Name="ControlBar" VerticalAlignment="Bottom" Padding="12,18,12,8">
@@ -119,6 +150,9 @@
                             </StackPanel>
 
                             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <!-- Only while a website video plays; shows what yt-dlp picked, e.g. 1080p60 -->
+                                <Button x:Name="QualityButton" Style="{StaticResource TextButton}" Visibility="Collapsed"
+                                        ToolTip="Website video quality" Click="Quality_Click"/>
                                 <Button x:Name="SpeedButton" Style="{StaticResource TextButton}" Content="1x"
                                         ToolTip="Playback speed ([ and ])" Click="Speed_Click"/>
                                 <Button x:Name="AudioButton" Style="{StaticResource IconButton}" Content="&#xE8D6;"

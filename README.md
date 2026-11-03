@@ -4,9 +4,11 @@
 [LibVLC](https://www.videolan.org/vlc/libvlc.html), the playback engine behind VLC.
 
 Because the decoding is done by LibVLC, it plays practically anything VLC plays: MKV, MP4, AVI, WebM,
-MOV, FLAC, MP3, Opus, network streams and more, with no codec packs to install. Around that engine it
-puts a dark, minimal window with an auto-hiding control bar, a playlist panel, subtitle and audio
-track switching, speed control and keyboard shortcuts for everything.
+MOV, FLAC, MP3, Opus, network streams and more, with no codec packs to install. With
+[yt-dlp](https://github.com/yt-dlp/yt-dlp), which it fetches and keeps up to date itself, it also plays
+YouTube and other website links. Around that engine it puts a dark, minimal window with an auto-hiding
+control bar, a playlist panel, subtitle and audio track switching, speed control and keyboard shortcuts
+for everything.
 
 ---
 
@@ -17,7 +19,7 @@ From the [latest release](https://github.com/DaanishSuhood/MorphPlayer/releases/
 | File | What it is |
 | --- | --- |
 | `MorphPlayer-Setup-<version>.exe` | **Installer.** Installs for you alone (or for all users, if you choose), adds Start menu and desktop shortcuts, offers MorphPlayer under **Open with** for media files, and adds an uninstaller in Settings → Apps. No admin rights needed. |
-| `MorphPlayer-<version>-portable.zip` | **Portable version.** Unzip it anywhere, such as a USB stick, and run `MorphPlayer\MorphPlayer.exe`. Nothing is installed; to remove it, delete the folder. |
+| `MorphPlayer-<version>-portable.zip` | **Portable version.** Unzip it anywhere, such as a USB stick, and run `MorphPlayer\MorphPlayer.exe`. Nothing is installed; to remove it, delete the folder (and `%LOCALAPPDATA%\MorphPlayer`, where it keeps resume positions and yt-dlp). |
 
 Both need Windows 10 or 11 (x64) and nothing else: no .NET install and no VLC. MorphPlayer is not
 code-signed, so SmartScreen may warn you the first time; click **More info → Run anyway**. Each release
@@ -81,7 +83,7 @@ installer with Inno Setup, and writes the checksums.
 | --- | --- |
 | **Double-click** | Toggles fullscreen |
 | **Mouse wheel** | Volume |
-| **Right-click** | Menu: open files, folder or stream; the file's audio and subtitle tracks; audio device and stereo mode; playlist; fullscreen |
+| **Right-click** | Menu: open files, folder or stream; the file's audio and subtitle tracks; audio device and stereo mode; website video quality; playlist; fullscreen; updates |
 | **Drop files or folders** | Added to the playlist, and the first one starts playing |
 | **Drop a subtitle file** | Loaded onto the video that is playing |
 
@@ -148,8 +150,12 @@ later and it carries on from there, with a **Resumed at 12:34 · Start over** ba
 Watching to the end forgets the position, so the next time starts from the top.
 
 As in VLC, files under 3 minutes (most songs) always start from the beginning, and positions within 30
-seconds of the start or the end aren't kept. Network streams are never resumed. Positions for the last 300
-files are kept, in `%LOCALAPPDATA%\MorphPlayer\state.json`.
+seconds of the start or the end aren't kept. Positions for the last 300 files are kept, in
+`%LOCALAPPDATA%\MorphPlayer\state.json`.
+
+Website videos resume too. Each one is kept under its page's address, so any link to the same video finds the
+same place. A link that names a start time, such as YouTube's `&t=58s`, starts there instead the first time it
+plays. Live streams, and network streams that don't go through yt-dlp, are never resumed.
 
 ### Audio and subtitle tracks
 
@@ -205,6 +211,83 @@ audio device and stereo mode you choose are remembered.
 **Ctrl+N** opens a box for a URL: `http(s)://`, `rtsp://`, `rtmp://`, `udp://@:1234`, `mms://` and
 anything else LibVLC accepts. If the clipboard already holds a URL it is filled in for you.
 
+### Website links (YouTube and others)
+
+Paste a web page's address into the same box, drop a link from a browser onto the window, or pass one on
+the command line. MorphPlayer asks [yt-dlp](https://github.com/yt-dlp/yt-dlp) what plays there, then hands
+the stream to LibVLC. Any `http(s)://` address that isn't a media file or a stream playlist (`.m3u8`,
+`.mpd`, …) is treated as a web page, so it works for
+[every site yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), not just
+YouTube.
+
+- **Streamed, not downloaded**: yt-dlp only looks up the stream addresses, and LibVLC plays from them as the
+  data arrives, so a long film starts as quickly as a short clip, and seeking jumps straight to the new point.
+- **Quality**: the button left of the speed button shows what's playing, such as `1080p60`, and appears only for
+  website videos. It and **Website Video Quality** in the right-click menu choose **2160p (4K)**, **1440p**,
+  **1080p** (the default), **720p**, **480p** or **360p**.
+
+  Each is a limit that applies to every video: a video that doesn't come in that resolution plays at the highest
+  it has below it. While a website video plays, the resolutions it doesn't offer are dimmed. Resolution is measured
+  by the shorter side, as yt-dlp does, so 4K ultrawide (3840×1608) counts as 2160p and a vertical 1080×1920 video
+  as 1080p. 8K isn't offered: YouTube mostly has it only in AV1.
+
+  Within the limit, MorphPlayer takes the highest frame rate, then the codec chosen at the bottom of the same
+  menu, falling back to the other when a video lacks it:
+
+  | Codec | Trade-off |
+  | --- | --- |
+  | **Prefer VP9 (less data)** (default) | About a quarter less data for the same picture, but starts and seeks about half as fast (roughly 6 s to start and 5–13 s per seek on a long video, against 3–4 s and 4–8 s for H.264) |
+  | **Prefer H.264 (faster seeking)** | Faster starts and seeks. YouTube offers H.264 only up to 1080p, so 1440p and 4K are VP9 either way |
+
+  GPUs from about 2016 on (Intel 7th generation, NVIDIA GTX 10-series, AMD RX 400 and later) decode VP9 in
+  hardware; older PCs decode it on the CPU, where 1080p60 can stutter. AV1 is never picked while a video has
+  anything else, even if that means a lower resolution, because LibVLC 3 decodes it on the CPU. A size offered only
+  in AV1 is dimmed in the menu like a size the video doesn't have.
+
+  Changing either setting reloads the video from the same point, and both are remembered. YouTube serves its best
+  video and audio as separate streams, and LibVLC plays them together, so no ffmpeg is needed. The audio is AAC
+  rather than Opus: LibVLC 3 loses the audio's place when seeking in YouTube's WebM files, so for VP9 MorphPlayer
+  opens the AAC audio (an MP4 file) as the main stream and adds the video to it.
+- **Playlist entries** take the video's title, channel, length and thumbnail.
+- **Captions** appear in the **Subtitles** menu once the video starts: every set the uploader added, and the
+  auto-generated set in the video's own language, up to 8 in all. The Windows display language comes first, then
+  English. None is turned on, as on YouTube. YouTube's machine translations of the auto-generated captions (often
+  over 100 languages) are left out.
+- **The first time** you open a link, MorphPlayer offers to download yt-dlp and
+  [Deno](https://deno.com), the JavaScript runtime yt-dlp needs for YouTube: about 65 MB from their GitHub
+  releases, each checked against its published SHA-256. If you say no, the link goes straight to LibVLC,
+  which manages a few sites on its own; **Updates → Get yt-dlp for Website Links** fetches them later.
+- They live in `%LOCALAPPDATA%\MorphPlayer\tools`, which is writable even when MorphPlayer is installed for
+  all users. The uninstaller removes them.
+- Addresses that yt-dlp says it doesn't support go to LibVLC instead. Other errors, such as *This video is
+  unavailable*, appear in the top-left corner.
+
+### Updates
+
+The **Updates** submenu of the right-click menu has:
+
+| Item | What it does |
+| --- | --- |
+| **Check for MorphPlayer Updates** | Asks GitHub for the latest release. If it is newer, **Update to MorphPlayer x.y.z** appears at the top of the menu (see below) |
+| **Update yt-dlp** | Runs `yt-dlp --update-to nightly`, as [SnagDL](https://github.com/DaanishSuhood/SnagDL) does: YouTube fixes reach the nightly builds well before stable ones. Shown as **Get yt-dlp for Website Links** until it's downloaded |
+| **Check Automatically** | On by default. Once a day at start-up, MorphPlayer asks GitHub for its latest release and updates yt-dlp in the background |
+
+When a newer MorphPlayer is out, a **MorphPlayer x.y.z is available · Update** banner shows in the top-right
+corner for 15 seconds at start-up. Its **×** hides it until the next version. MorphPlayer never updates without
+being asked. **Update** downloads the new version from the GitHub release, checks it against the release's
+`SHA256SUMS.txt`, closes MorphPlayer, installs it and starts MorphPlayer again:
+
+- **Installed:** the new installer runs silently, keeping your install folder and shortcuts. If MorphPlayer is
+  installed for all users, Windows asks for admin rights.
+- **Portable:** the new zip is unpacked and copied over the MorphPlayer folder once MorphPlayer has closed.
+- **Built from source**, or anything goes wrong (Smart App Control, for one, blocks the unsigned installer): the
+  release page opens instead, as **Download**.
+
+Each release includes the newest LibVLC, so this is also how LibVLC security fixes reach you.
+
+The daily check sends one request to `api.github.com`, which sees your IP address and the MorphPlayer version.
+Nothing else is sent.
+
 ---
 
 ## Keyboard shortcuts
@@ -219,7 +302,7 @@ anything else LibVLC accepts. If the clipboard already holds a URL it is filled 
 | **[ / ]** | Slower / faster | **=** | Reset speed to 1× |
 | **V** | Next subtitle track | **B** | Next audio track |
 | **Ctrl+O** | Open files | **Ctrl+F** | Open folder |
-| **Ctrl+N** | Open network stream | **Ctrl+L** | Show / hide playlist |
+| **Ctrl+N** | Open network stream or website link | **Ctrl+L** | Show / hide playlist |
 
 ---
 
@@ -243,7 +326,11 @@ anything else LibVLC accepts. If the clipboard already holds a URL it is filled 
 | `src/MorphPlayer/MainWindow.xaml.cs` | Player, playlist, shortcuts and all UI logic |
 | `src/MorphPlayer/PlaylistItem.cs` | One playlist entry (file path or URL) |
 | `src/MorphPlayer/UrlDialog.cs` | The **Open Network Stream** prompt |
-| `src/MorphPlayer/AppState.cs` | What's remembered between runs: resume positions, audio device, stereo mode |
+| `src/MorphPlayer/YtDlp.cs` | Fetches, updates and runs yt-dlp and Deno, and reads the stream behind a web page from yt-dlp's answer |
+| `src/MorphPlayer/UpdateChecker.cs` | Asks GitHub for the latest MorphPlayer release |
+| `src/MorphPlayer/Updater.cs` | Downloads and installs a new release: the installer run silently, or the portable zip copied over the folder |
+| `src/MorphPlayer/Web.cs` | The shared HTTP client, and downloads checked against a published SHA-256 |
+| `src/MorphPlayer/AppState.cs` | What's remembered between runs: resume positions, audio device, stereo mode, website video quality, update checks |
 | `src/MorphPlayer/FrameGrabber.cs` | Grabs single frames with a hidden player, for playlist thumbnails and seek bar previews |
 | `src/MorphPlayer/MovieArt.cs` | Finds a poster image saved beside a video |
 | `src/MorphPlayer/SubtitleFinder.cs` | Finds a video's subtitle files and names them by language |
@@ -261,6 +348,11 @@ anything else LibVLC accepts. If the clipboard already holds a URL it is filled 
 - **Only resume positions, the audio device and the stereo mode are saved.** Volume, speed, repeat,
   shuffle and the playlist reset each run.
 - **Opening another file from Explorer starts a second window** instead of adding to the running one.
+- **Website links play one video at a time.** A YouTube playlist link plays the video it points at, not the
+  whole list. Videos that need you to be signed in, such as age-restricted ones, don't play, because
+  MorphPlayer doesn't pass browser cookies to yt-dlp.
+- **Deno isn't updated by Update yt-dlp.** If YouTube links stop working even after updating yt-dlp, delete
+  `%LOCALAPPDATA%\MorphPlayer\tools` and open a link again to fetch both afresh.
 - A plain `dotnet build` output is large (about 300 MB) because the LibVLC package ships x86, x64 and
   ARM64 copies of every plugin. Release builds keep only x64.
 - **Smart App Control blocks it.** On PCs with Smart App Control turned on, Windows refuses to run

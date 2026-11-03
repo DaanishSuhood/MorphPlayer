@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -25,6 +27,11 @@ public partial class MainWindow : Window
         ".3gp", ".ogv", ".vob", ".divx", ".rm", ".rmvb", ".asf",
         ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".alac", ".aiff", ".ape", ".mka",
     };
+    // Stream playlists on a web server, which LibVLC opens itself like the media files above.
+    static readonly HashSet<string> StreamPlaylistExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".m3u8", ".m3u", ".mpd", ".pls", ".xspf", ".asx",
+    };
     static HashSet<string> SubtitleExtensions => SubtitleFinder.SubtitleExtensions;
     static readonly float[] Speeds = { 0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f, 4f };
     // LibVLC 3's "stereo-mode" values (vlc_aout.h AOUT_VAR_CHAN_*). LibVLCSharp's enum stops at 5, but
@@ -40,6 +47,21 @@ public partial class MainWindow : Window
         (AudioOutputChannel.RStereo, "Reverse Stereo", "Swaps left and right"),
         ((AudioOutputChannel)6, "Headphones", "For 5.1 and 7.1 sound: a binaural mix so the surround channels still "
                                               + "sound placed around you. Stereo files play as normal."),
+    };
+
+    // The highest resolution yt-dlp is asked for, highest first; a video without it plays at the next one down. Saved
+    // in AppState.WebMaxHeight. 8K is left out: YouTube mostly offers it only in AV1, which MorphPlayer avoids.
+    static readonly (int MaxHeight, string Name)[] WebQualities =
+    {
+        (2160, "2160p (4K)"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p"), (360, "360p"),
+    };
+
+    // The codec preferred for website videos, saved in AppState.WebCodec. See YtDlp.FormatSort for the trade-off.
+    static readonly (string Codec, string Name, string Tip)[] WebCodecs =
+    {
+        ("vp9", "Prefer VP9 (less data)", "About a quarter less data for the same picture. Starts and seeks more slowly"),
+        ("h264", "Prefer H.264 (faster seeking)",
+            "Starts and seeks about twice as fast. Up to 1080p: above that, YouTube only offers VP9"),
     };
 
     // Resume rules, as in VLC: short files (most songs) always start from the top, and a position near either
@@ -75,6 +97,13 @@ public partial class MainWindow : Window
     readonly DispatcherTimer _hideTimer = new() { Interval = TimeSpan.FromSeconds(2.5) };
     readonly DispatcherTimer _osdTimer = new() { Interval = TimeSpan.FromSeconds(1.5) };
     readonly DispatcherTimer _resumeBannerTimer = new() { Interval = TimeSpan.FromSeconds(8) };
+    readonly DispatcherTimer _updateBannerTimer = new() { Interval = TimeSpan.FromSeconds(15) };    readonly YtDlp _ytDlp = new();
+    readonly StreamRelay _relay = new();
+    CancellationTokenSource? _resolveCts;      // set while yt-dlp is asked about the web page being opened
+    TaskCompletionSource<bool>? _ytDlpAnswer;  // set while asking whether to fetch yt-dlp
+    (PlaylistItem Item, long TimeMs)? _restartAt; // where to carry on once a website video is reloaded at a new quality
+    bool _ytDlpBusy;                            // fetching or updating yt-dlp
+    bool _updating;                             // downloading a new MorphPlayer
 
     PlaylistItem? _current;
     RepeatMode _repeat;
@@ -115,6 +144,7 @@ public partial class MainWindow : Window
         _hideTimer.Tick += (_, _) => HideControls();
         _osdTimer.Tick += (_, _) => { _osdTimer.Stop(); OsdBorder.Visibility = Visibility.Collapsed; };
         _resumeBannerTimer.Tick += (_, _) => HideResumeBanner();
+        _updateBannerTimer.Tick += (_, _) => HideUpdateBanner();
     }
 
     // ---------- Startup / shutdown ----------
@@ -123,10 +153,13 @@ public partial class MainWindow : Window
     {
         if (Video.MediaPlayer != null) return;
         Video.MediaPlayer = _player;
+        DeleteCaptionFiles(); // left by a run that crashed
 
         // Files passed on the command line ("Open with…" / drag onto the .exe).
         var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
         if (args.Length > 0) AddToPlaylist(ExpandPaths(args), play: true);
+
+        _ = CheckForUpdatesAtStartup();
     }
 
     void Overlay_Loaded(object sender, RoutedEventArgs e)
@@ -141,6 +174,7 @@ public partial class MainWindow : Window
     void OnClosed(object? sender, EventArgs e)
     {
         _closing = true;
+        _resolveCts?.Cancel();
         _uiTimer.Stop();
         RememberPosition();
         _state.Save();
@@ -149,6 +183,8 @@ public partial class MainWindow : Window
         _thumbnailGrabber.Dispose();
         _previewGrabber.Dispose();
         _libVlc.Dispose();
+        _relay.Dispose();
+        DeleteCaptionFiles();
     }
 
     // ---------- Playlist ----------
@@ -188,6 +224,7 @@ public partial class MainWindow : Window
     void PlayItem(PlaylistItem item, bool recordHistory = true)
     {
         RememberPosition(); // of the file being left
+        CancelResolve();
         if (_current != null) _current.IsCurrent = false;
         _current = item;
         item.IsCurrent = true;
@@ -197,21 +234,41 @@ public partial class MainWindow : Window
             _shuffleRound.Add(item);
         }
 
-        using var media = item.IsUrl
-            ? new Media(_libVlc, new Uri(item.Source))
-            : new Media(_libVlc, item.Source, FromType.FromPath);
+        // A web page goes to yt-dlp first; this runs again once it has said what plays there.
+        if (NeedsYtDlp(item) && !(item.Stream is { IsFresh: true } known && known.MaxHeight == _state.WebMaxHeight
+                                  && known.Codec == _state.WebCodec))
+        {
+            _ = ResolveAndPlay(item);
+            return;
+        }
+
+        using var media = CreateMedia(item);
+        // Where to start: the same point after a change of quality; then where a link such as "&t=58s" says, the first
+        // time it plays; then wherever it was left.
         ResumePoint? resume = null;
-        if (!item.IsUrl && _state.Resume.TryGetValue(ResumeKey(item), out var saved))
+        long startMs = 0;
+        if (_restartAt is { } restart && restart.Item == item)
+        {
+            startMs = restart.TimeMs;
+        }
+        else if (item.Stream is { StartMs: > 0 } link && !item.LinkStartUsed)
+        {
+            startMs = link.StartMs;
+            item.LinkStartUsed = true;
+        }
+        else if (CanResume(item) && _state.Resume.TryGetValue(ResumeKey(item), out var saved))
         {
             resume = saved;
-            // Starting there directly, rather than seeking once playing, avoids a flash of the opening frames.
-            media.AddOption(FormattableString.Invariant($":start-time={saved.TimeMs / 1000.0:0.###}"));
+            startMs = saved.TimeMs;
         }
+        _restartAt = null;
+        // Starting there directly, rather than seeking once playing, avoids a flash of the opening frames.
+        if (startMs > 0) media.AddOption(FormattableString.Invariant($":start-time={startMs / 1000.0:0.###}"));
         _player.Play(media);
         _state.Save();
         ClearPreviewCache();
         _subtitleLabels.Clear();
-        _subtitlesPendingFor = item.IsUrl ? null : item;
+        _subtitlesPendingFor = item.IsUrl && item.Stream == null ? null : item;
         QueueMetadata(item, first: true); // the cover and title of what's playing matter most
 
         UpdateNowPlaying();
@@ -222,6 +279,323 @@ public partial class MainWindow : Window
         else
             HideResumeBanner();
         Osd(item.Title);
+    }
+
+    Media CreateMedia(PlaylistItem item)
+    {
+        if (item.Stream is { } stream)
+        {
+            // yt-dlp's addresses are used exactly as given: parsing them as a Uri can re-escape their signatures.
+            // Plain files go through the relay, which fetches them in ranges the site doesn't throttle.
+            var video = stream.RelayVideo ? _relay.Register(stream.Url, stream.Headers) : stream.Url;
+            var audio = stream.AudioUrl == null ? null
+                : stream.RelayAudio ? _relay.Register(stream.AudioUrl, stream.Headers) : stream.AudioUrl;
+            // Normally the video leads and the audio is added to it; for WebM video the other way round (see AudioLeads).
+            var web = new Media(_libVlc, stream.AudioLeads ? audio! : video, FromType.FromLocation);
+            foreach (var option in stream.Options) web.AddOption(option);
+            if (stream.AudioLeads) web.AddOption(":input-slave=" + video);
+            else if (audio != null) web.AddSlave(MediaSlaveType.Audio, 4, audio);
+            return web;
+        }
+        return item.IsUrl
+            ? new Media(_libVlc, new Uri(item.Source))
+            : new Media(_libVlc, item.Source, FromType.FromPath);
+    }
+
+    // ---------- Web pages (yt-dlp) ----------
+
+    /// <summary>
+    /// An http(s) address that isn't a media file or stream playlist is taken to be a web page, such as a YouTube
+    /// video, for yt-dlp to look at. Other protocols (rtsp, udp, …) always go straight to LibVLC.
+    /// </summary>
+    static bool NeedsYtDlp(PlaylistItem item)
+    {
+        if (!item.IsUrl || item.PlayDirectly || !Uri.TryCreate(item.Source, UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https"))
+            return false;
+        var extension = Path.GetExtension(uri.AbsolutePath);
+        return !MediaExtensions.Contains(extension) && !StreamPlaylistExtensions.Contains(extension);
+    }
+
+    async Task ResolveAndPlay(PlaylistItem item)
+    {
+        var resolve = _resolveCts = new CancellationTokenSource();
+        _player.Stop();
+        ResetTimeline();
+        HideResumeBanner();
+        Hint.Visibility = Visibility.Collapsed;
+        UpdateNowPlaying();
+        PlaylistBox.ScrollIntoView(item);
+        try
+        {
+            if (!YtDlp.IsInstalled && (_state.YtDlpDeclined || !await AskToGetYtDlp(resolve.Token) || !await GetYtDlp()))
+            {
+                // LibVLC's own support for a few sites may still manage.
+                item.PlayDirectly = true;
+            }
+            else
+            {
+                if (resolve.IsCancellationRequested) return;
+                Osd($"Opening {HostOf(item.Source)}…", seconds: 60);
+                var stream = await _ytDlp.ResolveAsync(item.Source, _state.WebMaxHeight, _state.WebCodec, resolve.Token);
+                ApplyWebDetails(item, stream);
+                // The site's addresses refuse requests until then (see WebStream.AvailableUtc); never wait over a minute.
+                var wait = stream.AvailableUtc - DateTime.UtcNow;
+                if (wait > TimeSpan.Zero) await Task.Delay(wait < TimeSpan.FromMinutes(1) ? wait : TimeSpan.FromMinutes(1), resolve.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (YtDlpException e) when (e.Unsupported)
+        {
+            item.PlayDirectly = true; // not a site yt-dlp knows; perhaps a stream LibVLC can open
+        }
+        catch (YtDlpException e)
+        {
+            if (!resolve.IsCancellationRequested) Osd($"Can't play this page: {e.Message}", seconds: 10);
+            return;
+        }
+        finally
+        {
+            if (_resolveCts == resolve) _resolveCts = null;
+        }
+        if (!resolve.IsCancellationRequested && item == _current) PlayItem(item, recordHistory: false);
+    }
+
+    /// <summary>Stops asking yt-dlp about a page that is no longer wanted.</summary>
+    void CancelResolve()
+    {
+        if (_resolveCts == null) return;
+        _resolveCts.Cancel();
+        _resolveCts = null;
+        OsdBorder.Visibility = Visibility.Collapsed; // its "Opening…" message
+    }
+
+    async void ApplyWebDetails(PlaylistItem item, WebStream stream)
+    {
+        item.Stream = stream;
+        item.HasVideo = stream.HasVideo;
+        if (stream.Title != null) item.Title = stream.Title;
+        var length = stream.DurationMs > 0 ? Format(stream.DurationMs) : null;
+        item.Details = NullIfBlank(string.Join(" · ", new[] { stream.Uploader, length }.Where(s => s != null)));
+        if (item.Thumbnail == null && stream.ThumbnailUrl != null) item.Thumbnail = await LoadWebImage(stream.ThumbnailUrl, decodeWidth: 96);
+    }
+
+    static string HostOf(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host.StartsWith("www.") ? uri.Host[4..] : uri.Host : url;
+
+    /// <summary>
+    /// Asks in the overlay rather than in a message box: a modal dialog over LibVLC's native video window, which a
+    /// link from the command line opens while the window is still loading, leaves both unresponsive.
+    /// </summary>
+    async Task<bool> AskToGetYtDlp(CancellationToken cancel)
+    {
+        var answer = _ytDlpAnswer = new TaskCompletionSource<bool>();
+        YtDlpPrompt.Visibility = Visibility.Visible;
+        bool yes;
+        try
+        {
+            using (cancel.Register(() => answer.TrySetCanceled()))
+                yes = await answer.Task;
+        }
+        finally
+        {
+            YtDlpPrompt.Visibility = Visibility.Collapsed;
+            _ytDlpAnswer = null;
+        }
+        if (!yes)
+        {
+            _state.YtDlpDeclined = true;
+            _state.Save();
+        }
+        return yes;
+    }
+
+    void AcceptYtDlp_Click(object sender, RoutedEventArgs e) => _ytDlpAnswer?.TrySetResult(true);
+    void DeclineYtDlp_Click(object sender, RoutedEventArgs e) => _ytDlpAnswer?.TrySetResult(false);
+
+    /// <summary>Fetches yt-dlp and Deno, with progress in the corner. True once both are in place.</summary>
+    async Task<bool> GetYtDlp()
+    {
+        if (_ytDlpBusy) return false;
+        _ytDlpBusy = true;
+        try
+        {
+            await _ytDlp.InstallAsync(new Progress<string>(text => Osd(text, seconds: 60)), CancellationToken.None);
+            _state.YtDlpUpdatedUtc = DateTime.UtcNow;
+            _state.YtDlpDeclined = false;
+            _state.Save();
+            Osd("yt-dlp is ready", seconds: 3);
+            return true;
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException
+                                      or TaskCanceledException or InvalidDataException)
+        {
+            Osd($"Couldn't get yt-dlp: {e.Message}", seconds: 10);
+            return false;
+        }
+        finally
+        {
+            _ytDlpBusy = false;
+        }
+    }
+
+    async Task UpdateYtDlp(bool quiet)
+    {
+        if (_ytDlpBusy) return;
+        _ytDlpBusy = true;
+        if (!quiet) Osd("Updating yt-dlp…", seconds: 60);
+        try
+        {
+            var version = await _ytDlp.UpdateAsync(CancellationToken.None);
+            _state.YtDlpUpdatedUtc = DateTime.UtcNow;
+            _state.Save();
+            if (!quiet) Osd($"yt-dlp is up to date ({version})", seconds: 4);
+        }
+        catch (YtDlpException e)
+        {
+            if (!quiet) Osd($"Couldn't update yt-dlp: {e.Message}", seconds: 10);
+        }
+        finally
+        {
+            _ytDlpBusy = false;
+        }
+    }
+
+    // ---------- Updates ----------
+
+    async Task CheckForUpdatesAtStartup()
+    {
+        if (!_state.CheckForUpdates) return;
+        ShowUpdateBanner(); // what the last check found, straight away
+        if (UpdateChecker.IsDue(_state) && await UpdateChecker.CheckAsync(_state)) ShowUpdateBanner();
+        // YouTube changes often, and an old yt-dlp is the usual reason a link stops playing.
+        if (YtDlp.IsInstalled && DayHasPassed(_state.YtDlpUpdatedUtc)) await UpdateYtDlp(quiet: true);
+    }
+
+    static bool DayHasPassed(DateTime? lastUtc) =>
+        lastUtc is not { } last || DateTime.UtcNow - last >= TimeSpan.FromDays(1) || last > DateTime.UtcNow;
+
+    async void CheckForUpdatesNow()
+    {
+        Osd("Checking for updates…", seconds: 15);
+        if (!await UpdateChecker.CheckAsync(_state))
+            Osd("Couldn't reach GitHub to check for updates", seconds: 4);
+        else if (UpdateChecker.Available(_state) is { } version)
+        {
+            Osd($"MorphPlayer {version} is available", seconds: 4);
+            ShowUpdateBanner(evenIfDismissed: true);
+        }
+        else
+            Osd($"MorphPlayer {UpdateChecker.CurrentVersion} is the latest version", seconds: 4);
+    }
+
+    void ShowUpdateBanner(bool evenIfDismissed = false)
+    {
+        if (UpdateChecker.Available(_state) is not { } version) return;
+        if (!evenIfDismissed && _state.DismissedVersion == version.ToString()) return;
+        UpdateText.Text = $"MorphPlayer {version} is available";
+        UpdateButton.Content = Updater.How == Updater.Mode.ReleasePage ? "Download" : "Update";
+        UpdateButton.IsEnabled = !_updating;
+        UpdateBanner.Visibility = Visibility.Visible;
+        _updateBannerTimer.Stop();
+        _updateBannerTimer.Start();
+    }
+
+    void HideUpdateBanner()
+    {
+        _updateBannerTimer.Stop();
+        UpdateBanner.Visibility = Visibility.Collapsed;
+    }
+
+    void OpenReleasePage()
+    {
+        HideUpdateBanner();
+        try
+        {
+            UpdateChecker.OpenReleasePage();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            Osd("Couldn't open a web browser", seconds: 4);
+        }
+    }
+
+    void DownloadUpdate_Click(object sender, RoutedEventArgs e) => _ = InstallUpdate();
+
+    /// <summary>
+    /// Downloads the new version, then closes MorphPlayer so the update can replace it; it starts again afterwards.
+    /// If this copy can't update itself, or anything goes wrong, the release page opens instead.
+    /// </summary>
+    async Task InstallUpdate()
+    {
+        if (Updater.How == Updater.Mode.ReleasePage)
+        {
+            OpenReleasePage();
+            return;
+        }
+        if (_updating || UpdateChecker.Available(_state) is not { } version) return;
+        _updating = true;
+        HideUpdateBanner();
+        try
+        {
+            Osd($"Downloading MorphPlayer {version}…", seconds: 120);
+            var start = await Updater.PrepareAsync(
+                new Progress<int>(p => Osd($"Downloading MorphPlayer {version}… {p}%", seconds: 120)), CancellationToken.None);
+            Osd($"Installing MorphPlayer {version}…", seconds: 60);
+            Process.Start(start)?.Dispose();
+            Close(); // saves where everything was; the update starts MorphPlayer again
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException
+                                      or InvalidDataException or System.Text.Json.JsonException or KeyNotFoundException
+                                      or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // Win32Exception: the installer was blocked, as Smart App Control does with unsigned apps, or UAC was refused.
+            Osd($"Couldn't update: {e.Message} Opening the download page instead.", seconds: 8);
+            OpenReleasePage();
+        }
+        finally
+        {
+            _updating = false;
+        }
+    }
+
+    void DismissUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        _state.DismissedVersion = UpdateChecker.Available(_state)?.ToString();
+        _state.Save();
+        HideUpdateBanner();
+    }
+
+    void AddUpdateItems(ItemCollection items)
+    {
+        if (UpdateChecker.Available(_state) is { } version)
+        {
+            var header = Updater.How == Updater.Mode.ReleasePage ? $"Download MorphPlayer {version}…" : $"Update to MorphPlayer {version}";
+            var download = new MenuItem { Header = header, FontWeight = FontWeights.SemiBold, IsEnabled = !_updating };
+            download.Click += (_, _) => _ = InstallUpdate();
+            items.Add(download);
+        }
+        var check = new MenuItem { Header = "Check for MorphPlayer Updates" };
+        check.Click += (_, _) => CheckForUpdatesNow();
+        items.Add(check);
+
+        var installed = YtDlp.IsInstalled;
+        var ytDlp = new MenuItem { Header = installed ? "Update yt-dlp" : "Get yt-dlp for Website Links", IsEnabled = !_ytDlpBusy };
+        ytDlp.ToolTip = "yt-dlp lets MorphPlayer play YouTube and other website links";
+        ytDlp.Click += (_, _) => _ = installed ? UpdateYtDlp(quiet: false) : GetYtDlp();
+        items.Add(ytDlp);
+
+        items.Add(new Separator());
+        var auto = Choice("Check Automatically", _state.CheckForUpdates, () =>
+        {
+            _state.CheckForUpdates = !_state.CheckForUpdates;
+            _state.Save();
+        });
+        auto.ToolTip = "Once a day, ask GitHub for a newer MorphPlayer and update yt-dlp";
+        items.Add(auto);
     }
 
     // ---------- Titles, cover art and thumbnails ----------
@@ -361,6 +735,27 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>A web page's thumbnail, read into memory first: a BitmapImage still downloading can't be frozen.</summary>
+    static async Task<BitmapImage?> LoadWebImage(string url, int decodeWidth)
+    {
+        try
+        {
+            var bytes = await Web.Client.GetByteArrayAsync(url);
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.StreamSource = new MemoryStream(bytes);
+            image.DecodePixelWidth = decodeWidth;
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return null; // a thumbnail is a nicety; the placeholder icon stays
+        }
+    }
+
     void Item_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (sender == _current && e.PropertyName is nameof(PlaylistItem.Title) or nameof(PlaylistItem.Details)
@@ -380,6 +775,87 @@ public partial class MainWindow : Window
         CoverImage.Source = cover;
         CoverFrame.Visibility = cover != null ? Visibility.Visible : Visibility.Collapsed;
         MusicGlyph.Visibility = cover != null ? Visibility.Collapsed : Visibility.Visible;
+        UpdateQualityButton();
+    }
+
+    // ---------- Website video quality ----------
+
+    /// <summary>Shown only for a website video, labelled with what yt-dlp picked, such as "1080p60".</summary>
+    void UpdateQualityButton()
+    {
+        var item = _current;
+        var show = item != null && NeedsYtDlp(item) && item.Stream?.HasVideo != false;
+        QualityButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show) return;
+        QualityButton.Content = item!.Stream is { Height: > 0 } s
+            ? $"{s.Height}p{(s.Fps > 30 ? Math.Round(s.Fps).ToString(CultureInfo.InvariantCulture) : "")}"
+            : "HD";
+    }
+
+    /// <summary>
+    /// Each entry is a limit, kept for every video. While a website video plays, the ones it doesn't reach are dimmed:
+    /// picking one still sets the limit, but this video plays at the highest it has.
+    /// </summary>
+    void AddQualityItems(ItemCollection items)
+    {
+        var offered = _current is { } playing && NeedsYtDlp(playing) ? playing.Stream?.Resolutions : null;
+        for (var i = 0; i < WebQualities.Length; i++)
+        {
+            var (maxHeight, name) = WebQualities[i];
+            var below = i + 1 < WebQualities.Length ? WebQualities[i + 1].MaxHeight : 0;
+            var item = Choice(name, maxHeight == _state.WebMaxHeight, () => SetWebQuality(maxHeight, name));
+            item.ToolTip = maxHeight == 2160 ? "Up to 4K. Can stutter on slower PCs" : $"Up to {name}";
+            // Ultrawide and other unusual sizes fall between the steps: 1608 counts towards 2160p.
+            if (offered != null && !offered.Any(r => r > below && r <= maxHeight))
+            {
+                item.Opacity = 0.45;
+                item.ToolTip = "This video doesn't come in this resolution. The setting still applies to later videos";
+            }
+            items.Add(item);
+        }
+
+        items.Add(new Separator());
+        foreach (var (codec, name, tip) in WebCodecs)
+        {
+            var item = Choice(name, codec == _state.WebCodec, () => SetWebCodec(codec, name));
+            item.ToolTip = tip;
+            items.Add(item);
+        }
+    }
+
+    void SetWebQuality(int maxHeight, string name)
+    {
+        if (maxHeight == _state.WebMaxHeight) return;
+        _state.WebMaxHeight = maxHeight;
+        _state.Save();
+        Osd($"Website video quality: {name}");
+        ReloadWebVideo();
+    }
+
+    void SetWebCodec(string codec, string name)
+    {
+        if (codec == _state.WebCodec) return;
+        _state.WebCodec = codec;
+        _state.Save();
+        Osd(name);
+        ReloadWebVideo();
+    }
+
+    /// <summary>The website video playing was picked for the old setting: look it up again and carry on from the same point.</summary>
+    void ReloadWebVideo()
+    {
+        if (_current is { } item && NeedsYtDlp(item) && _player.State is (VLCState.Playing or VLCState.Paused or VLCState.Buffering))
+        {
+            _restartAt = _player.IsSeekable ? (item, _player.Time) : null;
+            PlayItem(item, recordHistory: false);
+        }
+    }
+
+    void Quality_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu();
+        AddQualityItems(menu.Items);
+        ShowMenu(QualityButton, menu);
     }
 
     // ---------- Seek bar preview ----------
@@ -487,8 +963,16 @@ public partial class MainWindow : Window
 
     // ---------- Resume ----------
 
+    /// <summary>
+    /// Local files, and website videos yt-dlp found. Live streams and other network streams have no position worth
+    /// coming back to.
+    /// </summary>
+    static bool CanResume(PlaylistItem item) => !item.IsUrl || item.Stream is { IsLive: false, PageUrl: not null };
+
     static string ResumeKey(PlaylistItem item)
     {
+        // A website video is kept under its page's address, so any link to it ("&t=…" or not) finds the same place.
+        if (item.Stream?.PageUrl is { } page) return page;
         try { return Path.GetFullPath(item.Source); }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return item.Source; }
     }
@@ -496,7 +980,7 @@ public partial class MainWindow : Window
     /// <summary>Saves (in memory) where the current file is, or forgets it if that's too close to either end.</summary>
     void RememberPosition()
     {
-        if (_current is not { IsUrl: false } item || _player.State is not (VLCState.Playing or VLCState.Paused)) return;
+        if (_current is not { } item || !CanResume(item) || _player.State is not (VLCState.Playing or VLCState.Paused)) return;
         var time = _player.Time;
         var length = _player.Length;
         if (length >= ResumeMinLengthMs && time >= ResumeMarginMs && time <= length - ResumeMarginMs)
@@ -507,7 +991,7 @@ public partial class MainWindow : Window
 
     void ForgetPosition(PlaylistItem item)
     {
-        if (!item.IsUrl && _state.Resume.Remove(ResumeKey(item))) _state.Save();
+        if (CanResume(item) && _state.Resume.Remove(ResumeKey(item))) _state.Save();
     }
 
     void ShowResumeBanner(long timeMs)
@@ -597,6 +1081,7 @@ public partial class MainWindow : Window
 
     void ClearPlaylist()
     {
+        CancelResolve();
         RememberPosition();
         _state.Save();
         HideResumeBanner();
@@ -607,8 +1092,10 @@ public partial class MainWindow : Window
         _history.Clear();
         _shuffleRound.Clear();
         _current = null;
+        _restartAt = null;
         Title = "MorphPlayer";
         TitleText.Text = "";
+        UpdateQualityButton();
         Hint.Visibility = Visibility.Visible;
         ResetTimeline();
     }
@@ -628,7 +1115,7 @@ public partial class MainWindow : Window
         if (_subtitlesPendingFor is { } item && item == _current)
         {
             _subtitlesPendingFor = null;
-            _ = AttachMatchingSubtitles(item);
+            _ = item.Stream is { } stream ? AttachWebCaptions(item, stream) : AttachMatchingSubtitles(item);
         }
         UpdatePlayButton();
         ShowControls();
@@ -680,6 +1167,7 @@ public partial class MainWindow : Window
             else OpenFiles();
             return;
         }
+        if (_resolveCts != null) return; // still asking yt-dlp about the page
 
         if (_player.State is VLCState.Ended or VLCState.Stopped or VLCState.Error or VLCState.NothingSpecial)
             PlayItem(_current, recordHistory: false);
@@ -689,6 +1177,7 @@ public partial class MainWindow : Window
 
     void Stop()
     {
+        CancelResolve();
         RememberPosition();
         _state.Save();
         HideResumeBanner();
@@ -805,6 +1294,64 @@ public partial class MainWindow : Window
         {
             Osd($"Can't open {Path.GetFileName(path)}");
         }
+    }
+
+    // A website video's captions are read into temporary files, then added like subtitle files.
+    static readonly string CaptionsDir = Path.Combine(Path.GetTempPath(), "MorphPlayer-captions");
+    // Some videos carry captions in dozens of languages; fetching every one would be slow and could look like abuse.
+    const int MaxWebCaptions = 8;
+
+    /// <summary>
+    /// Adds a website video's captions to the Subtitles menu: first the Windows display language's, then English,
+    /// then the rest, uploaded before auto-generated. None is turned on, as on YouTube.
+    /// </summary>
+    async Task AttachWebCaptions(PlaylistItem item, WebStream stream)
+    {
+        var language = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        string Base(WebCaption c) => c.Language.Split('-')[0];
+        var chosen = stream.Captions
+            .OrderByDescending(c => Base(c) == language)
+            .ThenByDescending(c => Base(c) == "en")
+            .ThenBy(c => c.Auto)
+            .ThenBy(c => c.Label, StringComparer.CurrentCultureIgnoreCase)
+            .Take(MaxWebCaptions);
+        foreach (var caption in chosen)
+        {
+            var path = await DownloadCaption(caption, stream.Headers);
+            if (item != _current) return;
+            if (path != null) await AttachSubtitle(item, new SubtitleMatch(path, caption.Label, 0, false, caption.Language));
+        }
+    }
+
+    /// <summary>
+    /// Fetched here rather than by LibVLC, which would leave out the headers yt-dlp says the site wants. Null if the
+    /// site refuses, or sends something that isn't WebVTT.
+    /// </summary>
+    static async Task<string?> DownloadCaption(WebCaption caption, IReadOnlyDictionary<string, string> headers)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, caption.Url);
+            foreach (var (name, value) in headers) request.Headers.TryAddWithoutValidation(name, value);
+            using var response = await Web.Client.SendAsync(request);
+            if (!response.IsSuccessStatusCode) return null;
+            var text = await response.Content.ReadAsStringAsync();
+            if (!text.TrimStart('﻿').StartsWith("WEBVTT", StringComparison.Ordinal)) return null;
+            Directory.CreateDirectory(CaptionsDir);
+            var path = Path.Combine(CaptionsDir, Guid.NewGuid().ToString("N") + ".vtt");
+            await File.WriteAllTextAsync(path, text);
+            return path;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    static void DeleteCaptionFiles()
+    {
+        try { Directory.Delete(CaptionsDir, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { } // already gone, or one still open
     }
 
     string SubtitleName(TrackDescription track) => _subtitleLabels.TryGetValue(track.Id, out var label) ? label : track.Name;
@@ -929,6 +1476,8 @@ public partial class MainWindow : Window
         RefillMenu(SubtitleMenu, AddSubtitleItems);
         RefillMenu(AudioDeviceMenu, AddAudioDeviceItems);
         RefillMenu(StereoModeMenu, AddStereoModeItems);
+        RefillMenu(QualityMenu, AddQualityItems);
+        RefillMenu(UpdatesMenu, AddUpdateItems);
     }
 
     static void RefillMenu(MenuItem menu, Action<ItemCollection> fill)
@@ -979,11 +1528,12 @@ public partial class MainWindow : Window
 
     void UpdateMuteButton() => MuteButton.Content = _muted || VolumeSlider.Value == 0 ? "\uE74F" : "\uE767";
 
-    void Osd(string text)
+    void Osd(string text, double seconds = 1.5)
     {
         OsdText.Text = text;
         OsdBorder.Visibility = Visibility.Visible;
         _osdTimer.Stop();
+        _osdTimer.Interval = TimeSpan.FromSeconds(seconds);
         _osdTimer.Start();
     }
 

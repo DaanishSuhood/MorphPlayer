@@ -62,7 +62,7 @@ Source: "..\artifacts\publish\{#AppName}\*"; DestDir: "{app}"; Flags: ignorevers
 Type: filesandordirs; Name: "{app}\libvlc"
 
 [UninstallDelete]
-; Resume positions and audio choices (state.json).
+; Resume positions and audio choices (state.json), and the yt-dlp and Deno it fetched (tools\).
 Type: filesandordirs; Name: "{localappdata}\{#AppName}"
 
 [Icons]
@@ -84,11 +84,19 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; MorphPlayer's own updater runs this installer silently with /RELAUNCH=1, and expects to be started again afterwards.
+; runasoriginaluser: an all-users install runs as admin, and MorphPlayer shouldn't.
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
 
 [Code]
 { Windows never lets an installer make itself the default player; these entries only offer MorphPlayer as a
   choice for each extension. The per-extension values are written here rather than in [Registry] so the list
   lives in one place (MediaExts). }
+
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
 
 function RootKey: Integer;
 begin

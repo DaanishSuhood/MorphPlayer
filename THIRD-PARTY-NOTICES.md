@@ -10,6 +10,15 @@ separate, unmodified DLLs. They are **not** covered by MorphPlayer's MIT License
 | LibVLCSharp | 3.10.2 | LGPL-2.1-or-later | [code.videolan.org/videolan/LibVLCSharp](https://code.videolan.org/videolan/LibVLCSharp) |
 | LibVLCSharp.WPF | 3.10.2 | LGPL-2.1-or-later | [code.videolan.org/videolan/LibVLCSharp](https://code.videolan.org/videolan/LibVLCSharp) |
 
+To play website links, MorphPlayer can also download two programs at your request. They are fetched from
+their own GitHub releases into `%LOCALAPPDATA%\MorphPlayer\tools`, run as separate processes, and are
+not part of MorphPlayer's downloads:
+
+| Component | Licence | Source |
+| --- | --- | --- |
+| yt-dlp (nightly builds) | Unlicense | [github.com/yt-dlp/yt-dlp](https://github.com/yt-dlp/yt-dlp) |
+| Deno | MIT | [github.com/denoland/deno](https://github.com/denoland/deno) |
+
 The LibVLC plugins bundle further open-source libraries (for example FFmpeg's libavcodec) under their
 own licences. Copyright notices for those are part of the VLC source tree.
 

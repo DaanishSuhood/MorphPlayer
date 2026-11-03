@@ -42,6 +42,13 @@ public sealed class PlaylistItem : INotifyPropertyChanged
     public string? Artist { get; set; }
     public string? Album { get; set; }
 
+    /// <summary>For a web page: the stream yt-dlp found behind it, once asked.</summary>
+    public WebStream? Stream { get; set; }
+    /// <summary>A URL to hand straight to LibVLC, without asking yt-dlp: it doesn't know the site, or isn't installed.</summary>
+    public bool PlayDirectly { get; set; }
+    /// <summary>Set once a link's own start time ("&amp;t=58s") has been used; replays start as usual.</summary>
+    public bool LinkStartUsed { get; set; }
+
     public bool IsCurrent { get => _isCurrent; set => Set(ref _isCurrent, value); }
 
     /// <summary>The track title from the tags, or the file name.</summary>
