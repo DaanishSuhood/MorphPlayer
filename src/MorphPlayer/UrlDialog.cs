@@ -16,22 +16,27 @@ public sealed class UrlDialog : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
+        // Colours from the theme, like the main window; the styles are in App.xaml.
+        SetResourceReference(BackgroundProperty, "Panel");
+        SetResourceReference(ForegroundProperty, "Fg");
+        TitleBarTheme.Follow(this);
 
-        _box = new TextBox { Width = 460, Padding = new Thickness(4), Margin = new Thickness(0, 6, 0, 14) };
+        _box = new TextBox { Width = 460, Margin = new Thickness(0, 8, 0, 16), Style = (Style)FindResource("DialogTextBox") };
         if (Clipboard.ContainsText() && LooksLikeUrl(Clipboard.GetText().Trim()))
             _box.Text = Clipboard.GetText().Trim();
 
-        var ok = new Button { Content = "Play", Width = 80, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var buttonStyle = (Style)FindResource("DialogButton");
+        var ok = new Button { Content = "Play", IsDefault = true, Margin = new Thickness(0, 0, 8, 0), Style = buttonStyle };
         ok.Click += (_, _) => DialogResult = LooksLikeUrl(_box.Text.Trim());
-        var cancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
+        var cancel = new Button { Content = "Cancel", IsCancel = true, Style = buttonStyle };
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         buttons.Children.Add(ok);
         buttons.Children.Add(cancel);
 
         var root = new StackPanel { Margin = new Thickness(16) };
-        root.Children.Add(new TextBlock { Text = "Enter a network URL (e.g. https://…, rtsp://…, udp://@:1234),\n"
-                                                 + "or a web page such as a YouTube video:" });
+        root.Children.Add(new TextBlock { FontSize = 13, Text = "Enter a network URL (e.g. https://…, rtsp://…, udp://@:1234),\n"
+                                                                + "or a web page such as a YouTube video:" });
         root.Children.Add(_box);
         root.Children.Add(buttons);
         Content = root;

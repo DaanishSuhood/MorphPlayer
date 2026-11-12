@@ -11,7 +11,7 @@
     <Description>Windows media player in C#/WPF on LibVLC</Description>
     <Authors>Daanish Suhood</Authors>
     <Copyright>Copyright (c) 2026 Daanish Suhood</Copyright>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
   </PropertyGroup>
 
   <!-- A release build for one runtime (publish.ps1 uses win-x64) only needs that architecture's copy

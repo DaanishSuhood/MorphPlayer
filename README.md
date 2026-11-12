@@ -6,9 +6,9 @@
 Because the decoding is done by LibVLC, it plays practically anything VLC plays: MKV, MP4, AVI, WebM,
 MOV, FLAC, MP3, Opus, network streams and more, with no codec packs to install. With
 [yt-dlp](https://github.com/yt-dlp/yt-dlp), which it fetches and keeps up to date itself, it also plays
-YouTube and other website links. Around that engine it puts a dark, minimal window with an auto-hiding
-control bar, a playlist panel, subtitle and audio track switching, speed control and keyboard shortcuts
-for everything.
+YouTube and other website links. Around that engine it puts a minimal window, in a choice of themes and
+accent colours, with an auto-hiding control bar, a playlist panel, subtitle and audio track switching,
+speed control and keyboard shortcuts for everything.
 
 ---
 
@@ -54,6 +54,9 @@ You can also pass files or folders on the command line, which is what makes **Op
 MorphPlayer.exe "C:\Videos\film.mkv" "C:\Music\Album"
 ```
 
+If MorphPlayer is already running, they open in that window (see [One window](#one-window)); add
+`--new-window` to start a second one.
+
 A build from source has no LibVLC plugin cache, so its first launch can take 20 seconds or more while
 LibVLC loads and Windows scans all ~320 plugin DLLs. Release builds include the cache (see below) and
 start in about a second.
@@ -83,7 +86,7 @@ installer with Inno Setup, and writes the checksums.
 | --- | --- |
 | **Double-click** | Toggles fullscreen |
 | **Mouse wheel** | Volume |
-| **Right-click** | Menu: open files, folder or stream; the file's audio and subtitle tracks; audio device and stereo mode; website video quality; playlist; fullscreen; updates |
+| **Right-click** | Menu: open files, folder or stream; the file's audio and subtitle tracks; audio device and stereo mode; website video quality; playlist; fullscreen; theme and accent colour; updates |
 | **Drop files or folders** | Added to the playlist, and the first one starts playing |
 | **Drop a subtitle file** | Loaded onto the video that is playing |
 
@@ -262,6 +265,47 @@ YouTube.
 - Addresses that yt-dlp says it doesn't support go to LibVLC instead. Other errors, such as *This video is
   unavailable*, appear in the top-left corner.
 
+### One window
+
+MorphPlayer keeps to one window. Opening a file from Explorer, **Open with**, or the command line while it is
+running adds the file to that window's playlist and plays it, and brings the window forward (out of the
+taskbar, if it was minimized). Starting MorphPlayer again with nothing to open just brings the window forward.
+
+Select several files in Explorer and press **Enter**, and Windows starts MorphPlayer once per file. The first
+to arrive plays and the rest queue up behind it, in whatever order Windows sent them.
+
+Each Windows account gets its own window, and only your own account can send files to it. To have two
+windows anyway, say to compare two videos, start the second with `MorphPlayer.exe --new-window`.
+
+### Themes and colours
+
+**Theme** in the right-click menu changes the look of everything around the picture: the title bar, the
+playlist panel, the menus and tooltips, the **Open Network Stream** box, and the video area while there's no
+picture in it.
+
+| Theme | Look |
+| --- | --- |
+| **Match Windows** | **Dark** or **Light**, whichever Windows is set to for apps (Settings → Personalization → Colors), changing when Windows does |
+| **Dark** | Charcoal panels on a black video area (the default) |
+| **Black** | Pure black throughout, for OLED screens |
+| **Midnight** | Deep navy |
+| **Forest** | Deep green |
+| **Plum** | Deep purple |
+| **Light** | Light panels, menus and title bar. The video area stays black, like a cinema screen |
+
+**Accent Colour** sets the colour of the seek and volume bars, the playing item in the playlist, check marks
+and highlighted buttons: **Orange** (the default), **Red**, **Pink**, **Purple**, **Blue**, **Teal**,
+**Green** or **Gold**; **Windows Accent**, which follows the accent colour chosen in Windows Settings; or
+**Custom…**, which opens the Windows colour picker for any colour at all.
+
+Both change at once, with no restart, and are remembered. The control bar and the messages over the picture
+stay light on dark in every theme, since they sit on the video. Where an accent would be hard to see against
+its background, such as navy on black or gold on the Light theme's panels, it is lightened or darkened just
+enough to stand out (a 3:1 contrast ratio); the colour you picked is still what's saved.
+
+On Windows 11 the title bar takes the theme's own colour. Windows 10 only offers a dark or a light title bar,
+so it gets whichever suits the theme.
+
 ### Updates
 
 The **Updates** submenu of the right-click menu has:
@@ -330,11 +374,15 @@ Nothing else is sent.
 | `src/MorphPlayer/UpdateChecker.cs` | Asks GitHub for the latest MorphPlayer release |
 | `src/MorphPlayer/Updater.cs` | Downloads and installs a new release: the installer run silently, or the portable zip copied over the folder |
 | `src/MorphPlayer/Web.cs` | The shared HTTP client, and downloads checked against a published SHA-256 |
-| `src/MorphPlayer/AppState.cs` | What's remembered between runs: resume positions, audio device, stereo mode, website video quality, update checks |
+| `src/MorphPlayer/AppState.cs` | What's remembered between runs: resume positions, audio device, stereo mode, website video quality, theme and accent colour, update checks |
+| `src/MorphPlayer/SingleInstance.cs` | Keeps MorphPlayer to one window: a named mutex to tell whether it's running, a named pipe to pass it files |
+| `src/MorphPlayer/Themes.cs` | The themes and accent colours, and the brushes the XAML uses for whichever are chosen |
+| `src/MorphPlayer/TitleBarTheme.cs` | Colours the title bar to match the theme, and notices when Windows' own colours change |
+| `src/MorphPlayer/ColorPicker.cs` | The Windows colour dialog, for a custom accent colour |
 | `src/MorphPlayer/FrameGrabber.cs` | Grabs single frames with a hidden player, for playlist thumbnails and seek bar previews |
 | `src/MorphPlayer/MovieArt.cs` | Finds a poster image saved beside a video |
 | `src/MorphPlayer/SubtitleFinder.cs` | Finds a video's subtitle files and names them by language |
-| `src/MorphPlayer/App.xaml(.cs)` | Shared styles (icon buttons, sliders, colours) and LibVLC start-up |
+| `src/MorphPlayer/App.xaml(.cs)` | Shared styles (icon buttons, sliders, menus, tooltips), and start-up: the one-window check, LibVLC, the theme |
 | `installer/MorphPlayer.iss` | Inno Setup script: files, shortcuts, Open with and Default apps registration |
 | `publish.ps1` | Release build: portable zip, installer, plugin cache, checksums |
 | `tools/icon/make_icon.py` | Draws the app icon (`python -I tools/icon/make_icon.py`, needs Pillow) |
@@ -345,9 +393,10 @@ Nothing else is sent.
 
 - **Windows only**, and releases are **x64 only** (they also run on Windows 11 on ARM through emulation).
   WPF and the `VideoView` used here are Windows-specific.
-- **Only resume positions, the audio device and the stereo mode are saved.** Volume, speed, repeat,
-  shuffle and the playlist reset each run.
-- **Opening another file from Explorer starts a second window** instead of adding to the running one.
+- **Only resume positions, the audio device, the stereo mode, the website video quality, and the theme and
+  accent colour are saved.** Volume, speed, repeat, shuffle and the playlist reset each run.
+- **A copy run as administrator is on its own.** Windows doesn't let an ordinary copy pass files to one that
+  was started with **Run as administrator**, so opening a file then starts a second window.
 - **Website links play one video at a time.** A YouTube playlist link plays the video it points at, not the
   whole list. Videos that need you to be signed in, such as age-restricted ones, don't play, because
   MorphPlayer doesn't pass browser cookies to yt-dlp.

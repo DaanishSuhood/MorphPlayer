@@ -5,7 +5,7 @@ namespace MorphPlayer;
 
 /// <summary>
 /// What MorphPlayer remembers between runs, kept in %LOCALAPPDATA%\MorphPlayer\state.json: resume positions, audio
-/// choices, and when it last looked for updates.
+/// choices, the theme and accent colour, and when it last looked for updates.
 /// </summary>
 sealed class AppState
 {
@@ -28,6 +28,12 @@ sealed class AppState
 
     /// <summary>The video codec preferred for website links: "vp9" (less data) or "h264" (faster starts and seeking).</summary>
     public string WebCodec { get; set; } = "vp9";
+
+    /// <summary>A theme's id from Themes.All, or "system" to match Windows' dark or light app mode.</summary>
+    public string Theme { get; set; } = Themes.DefaultTheme;
+
+    /// <summary>The accent colour as "#RRGGBB", or "windows" to use the accent colour chosen in Windows Settings.</summary>
+    public string Accent { get; set; } = Themes.DefaultAccent;
 
     /// <summary>Whether to ask GitHub for a newer MorphPlayer, and update yt-dlp, once a day.</summary>
     public bool CheckForUpdates { get; set; } = true;

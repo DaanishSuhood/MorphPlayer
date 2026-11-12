@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         Title="MorphPlayer" Icon="Assets/MorphPlayer.ico" Width="1100" Height="650" MinWidth="560" MinHeight="340"
-        Background="#101010" AllowDrop="True"
+        Background="{DynamicResource Stage}" AllowDrop="True"
         PreviewKeyDown="OnKeyDown" Closed="OnClosed">
     <Grid>
         <Grid.ColumnDefinitions>
@@ -19,7 +19,8 @@
                   MouseLeftButtonDown="Overlay_MouseLeftButtonDown" MouseWheel="Overlay_MouseWheel"
                   Loaded="Overlay_Loaded">
                 <Grid.ContextMenu>
-                    <!-- The track, subtitle, device, stereo, quality and updates submenus are filled in OverlayMenu_Opened. -->
+                    <!-- The track, subtitle, device, stereo, quality, theme, accent and updates submenus are filled in
+                         OverlayMenu_Opened. -->
                     <ContextMenu Opened="OverlayMenu_Opened" Closed="Menu_Closed">
                         <MenuItem Header="Open File(s)…" InputGestureText="Ctrl+O" Click="OpenFiles_Click"/>
                         <MenuItem Header="Open Folder…" InputGestureText="Ctrl+F" Click="OpenFolder_Click"/>
@@ -35,16 +36,19 @@
                         <MenuItem Header="Playlist" InputGestureText="Ctrl+L" Click="Playlist_Click"/>
                         <MenuItem Header="Fullscreen" InputGestureText="F" Click="Fullscreen_Click"/>
                         <Separator/>
+                        <MenuItem x:Name="ThemeMenu" Header="Theme"/>
+                        <MenuItem x:Name="AccentMenu" Header="Accent Colour"/>
+                        <Separator/>
                         <MenuItem x:Name="UpdatesMenu" Header="Updates"/>
                     </ContextMenu>
                 </Grid.ContextMenu>
                 <StackPanel x:Name="Hint" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
                     <TextBlock Text="&#xE8B2;" FontFamily="{StaticResource Icons}" FontSize="56"
-                               Foreground="{StaticResource Accent}" HorizontalAlignment="Center"/>
-                    <TextBlock Text="Drop media files here" FontSize="18" Foreground="{StaticResource Fg}"
+                               Foreground="{DynamicResource Accent}" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Drop media files here" FontSize="18" Foreground="{DynamicResource Fg}"
                                HorizontalAlignment="Center" Margin="0,16,0,4"/>
                     <TextBlock Text="or press Ctrl+O to open · Ctrl+N for a stream or YouTube link" FontSize="13"
-                               Foreground="{StaticResource FgDim}" HorizontalAlignment="Center"/>
+                               Foreground="{DynamicResource FgDim}" HorizontalAlignment="Center"/>
                 </StackPanel>
 
                 <!-- Shown while an audio-only file plays: the cover art if there is one, else a music note.
@@ -53,40 +57,40 @@
                          Margin="24,24,24,110">
                     <StackPanel MaxWidth="560">
                         <TextBlock x:Name="MusicGlyph" Text="&#xE8D6;" FontFamily="{StaticResource Icons}" FontSize="72"
-                                   Foreground="{StaticResource Accent}" HorizontalAlignment="Center"/>
+                                   Foreground="{DynamicResource Accent}" HorizontalAlignment="Center"/>
                         <Border x:Name="CoverFrame" Visibility="Collapsed" HorizontalAlignment="Center"
-                                BorderBrush="#30FFFFFF" BorderThickness="1">
+                                BorderBrush="{DynamicResource Divider}" BorderThickness="1">
                             <Image x:Name="CoverImage" MaxWidth="320" MaxHeight="320" Stretch="Uniform"
                                    RenderOptions.BitmapScalingMode="HighQuality"/>
                         </Border>
-                        <TextBlock Text="{Binding Text, ElementName=TitleText}" FontSize="20" Foreground="{StaticResource Fg}"
+                        <TextBlock Text="{Binding Text, ElementName=TitleText}" FontSize="20" Foreground="{DynamicResource Fg}"
                                    HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,18,0,0"/>
-                        <TextBlock x:Name="AudioDetails" Visibility="Collapsed" FontSize="15" Foreground="{StaticResource FgDim}"
+                        <TextBlock x:Name="AudioDetails" Visibility="Collapsed" FontSize="15" Foreground="{DynamicResource FgDim}"
                                    HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0"/>
                     </StackPanel>
                 </Viewbox>
 
                 <!-- Shown for a few seconds when a file picks up where it was left -->
                 <Border x:Name="ResumeBanner" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Top"
-                        Margin="16" Background="#E0181818" CornerRadius="6" Padding="14,4,4,4">
+                        Margin="16" Background="{DynamicResource Card}" CornerRadius="6" Padding="14,4,4,4">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock x:Name="ResumeText" Foreground="{StaticResource Fg}" FontSize="14" VerticalAlignment="Center"/>
-                        <Button Style="{StaticResource TextButton}" Content="Start over" Foreground="{StaticResource Accent}"
+                        <TextBlock x:Name="ResumeText" Foreground="{DynamicResource Fg}" FontSize="14" VerticalAlignment="Center"/>
+                        <Button Style="{StaticResource TextButton}" Content="Start over" Foreground="{DynamicResource Accent}"
                                 Height="30" Margin="10,0,0,0" Click="StartOver_Click"/>
                     </StackPanel>
                 </Border>
 
                 <!-- Asks before fetching yt-dlp, the first time a web page is opened; see AskToGetYtDlp -->
                 <Border x:Name="YtDlpPrompt" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center"
-                        Margin="24,24,24,110" MaxWidth="500" Background="#E0181818" CornerRadius="6" Padding="18,14,10,8">
+                        Margin="24,24,24,110" MaxWidth="500" Background="{DynamicResource Card}" CornerRadius="6" Padding="18,14,10,8">
                     <StackPanel>
-                        <TextBlock Text="Play website links with yt-dlp?" Foreground="{StaticResource Fg}" FontSize="16"
+                        <TextBlock Text="Play website links with yt-dlp?" Foreground="{DynamicResource Fg}" FontSize="16"
                                    FontWeight="SemiBold"/>
-                        <TextBlock Foreground="{StaticResource FgDim}" FontSize="13" TextWrapping="Wrap" Margin="0,6,8,6"
+                        <TextBlock Foreground="{DynamicResource FgDim}" FontSize="13" TextWrapping="Wrap" Margin="0,6,8,6"
                                    Text="To play YouTube and other website links, MorphPlayer needs yt-dlp, plus Deno, which yt-dlp uses for YouTube. It can download both from GitHub now (about 65 MB) and keep yt-dlp up to date. If not, it tries the link on its own, and you can get yt-dlp later under Updates in the right-click menu."/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Style="{StaticResource TextButton}" Content="Not now" Height="30" Click="DeclineYtDlp_Click"/>
-                            <Button Style="{StaticResource TextButton}" Content="Download" Foreground="{StaticResource Accent}"
+                            <Button Style="{StaticResource TextButton}" Content="Download" Foreground="{DynamicResource Accent}"
                                     Height="30" Margin="6,0,0,0" Click="AcceptYtDlp_Click"/>
                         </StackPanel>
                     </StackPanel>
@@ -94,10 +98,10 @@
 
                 <!-- Shown for a while at start-up when GitHub has a newer release -->
                 <Border x:Name="UpdateBanner" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Margin="16" Background="#E0181818" CornerRadius="6" Padding="14,4,4,4">
+                        Margin="16" Background="{DynamicResource Card}" CornerRadius="6" Padding="14,4,4,4">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock x:Name="UpdateText" Foreground="{StaticResource Fg}" FontSize="14" VerticalAlignment="Center"/>
-                        <Button x:Name="UpdateButton" Style="{StaticResource TextButton}" Content="Update" Foreground="{StaticResource Accent}"
+                        <TextBlock x:Name="UpdateText" Foreground="{DynamicResource Fg}" FontSize="14" VerticalAlignment="Center"/>
+                        <Button x:Name="UpdateButton" Style="{StaticResource TextButton}" Content="Update" Foreground="{DynamicResource Accent}"
                                 Height="30" Margin="10,0,0,0" Click="DownloadUpdate_Click"/>
                         <Button Style="{StaticResource IconButton}" Content="&#xE711;" FontSize="11" Height="30" MinWidth="30"
                                 ToolTip="Don't show this again until the next version" Click="DismissUpdate_Click"/>
@@ -125,13 +129,13 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="TimeText" Text="0:00" Foreground="{StaticResource Fg}"
+                            <TextBlock x:Name="TimeText" Text="0:00" Foreground="{DynamicResource Fg}"
                                        VerticalAlignment="Center" MinWidth="44"/>
                             <Slider x:Name="SeekSlider" Grid.Column="1" Style="{StaticResource FlatSlider}"
                                     Minimum="0" Maximum="1" Margin="10,0" IsEnabled="False"
                                     Thumb.DragStarted="Seek_DragStarted" Thumb.DragCompleted="Seek_DragCompleted"
                                     ValueChanged="Seek_ValueChanged" MouseMove="Seek_MouseMove" MouseLeave="Seek_MouseLeave"/>
-                            <TextBlock x:Name="LengthText" Grid.Column="2" Text="--:--" Foreground="{StaticResource Fg}"
+                            <TextBlock x:Name="LengthText" Grid.Column="2" Text="--:--" Foreground="{DynamicResource Fg}"
                                        VerticalAlignment="Center" MinWidth="44" TextAlignment="Right"/>
                         </Grid>
 
@@ -142,7 +146,7 @@
                                 <Button Style="{StaticResource IconButton}" Content="&#xE71A;" ToolTip="Stop (S)" Click="Stop_Click"/>
                                 <Button Style="{StaticResource IconButton}" Content="&#xE892;" ToolTip="Previous (P)" Click="Prev_Click"/>
                                 <Button Style="{StaticResource IconButton}" Content="&#xE893;" ToolTip="Next (N)" Click="Next_Click"/>
-                                <Border Width="1" Background="#40FFFFFF" Margin="6,8"/>
+                                <Border Width="1" Background="{DynamicResource Divider}" Margin="6,8"/>
                                 <Button x:Name="ShuffleButton" Style="{StaticResource IconButton}" Content="&#xE8B1;"
                                         ToolTip="Shuffle" Click="Shuffle_Click"/>
                                 <Button x:Name="RepeatButton" Style="{StaticResource IconButton}" Content="&#xE8EE;"
@@ -159,11 +163,11 @@
                                         ToolTip="Audio track (B)" Click="AudioTracks_Click"/>
                                 <Button x:Name="SubtitleButton" Style="{StaticResource IconButton}" Content="&#xE7F0;"
                                         ToolTip="Subtitles (V)" Click="Subtitles_Click"/>
-                                <Border Width="1" Background="#40FFFFFF" Margin="6,8"/>
+                                <Border Width="1" Background="{DynamicResource Divider}" Margin="6,8"/>
                                 <Button Style="{StaticResource IconButton}" Content="&#xE8E5;" ToolTip="Open file(s) (Ctrl+O)" Click="OpenFiles_Click"/>
                                 <Button Style="{StaticResource IconButton}" Content="&#xE774;" ToolTip="Open network stream (Ctrl+N)" Click="OpenUrl_Click"/>
                                 <Button Style="{StaticResource IconButton}" Content="&#xE8FD;" ToolTip="Playlist (Ctrl+L)" Click="Playlist_Click"/>
-                                <Border Width="1" Background="#40FFFFFF" Margin="6,8"/>
+                                <Border Width="1" Background="{DynamicResource Divider}" Margin="6,8"/>
                                 <Button x:Name="MuteButton" Style="{StaticResource IconButton}" Content="&#xE767;"
                                         ToolTip="Mute (M)" Click="Mute_Click"/>
                                 <Slider x:Name="VolumeSlider" Style="{StaticResource FlatSlider}" Width="90"
@@ -172,7 +176,7 @@
                                         ToolTip="Fullscreen (F)" Click="Fullscreen_Click"/>
                             </StackPanel>
 
-                            <TextBlock x:Name="TitleText" Foreground="{StaticResource FgDim}" FontSize="13"
+                            <TextBlock x:Name="TitleText" Foreground="{DynamicResource FgDim}" FontSize="13"
                                        VerticalAlignment="Center" Margin="12,0" TextTrimming="CharacterEllipsis"/>
                         </DockPanel>
                     </StackPanel>
@@ -181,19 +185,19 @@
                 <!-- Frame and time under the pointer while hovering the seek bar; placed in Seek_MouseMove -->
                 <Border x:Name="SeekPreview" Visibility="Collapsed" IsHitTestVisible="False"
                         HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                        Background="#F0101010" BorderBrush="#40FFFFFF" BorderThickness="1" CornerRadius="4" Padding="3">
+                        Background="{DynamicResource Card}" BorderBrush="{DynamicResource Divider}" BorderThickness="1" CornerRadius="4" Padding="3">
                     <StackPanel>
                         <Image x:Name="SeekPreviewImage" Visibility="Collapsed" Width="240" Stretch="Uniform"
                                RenderOptions.BitmapScalingMode="HighQuality"/>
-                        <TextBlock x:Name="SeekPreviewTime" Foreground="White" FontSize="13" HorizontalAlignment="Center"
+                        <TextBlock x:Name="SeekPreviewTime" Foreground="{DynamicResource Fg}" FontSize="13" HorizontalAlignment="Center"
                                    Margin="6,2"/>
                     </StackPanel>
                 </Border>
             </Grid>
         </vlc:VideoView>
 
-        <Border x:Name="PlaylistPanel" Grid.Column="1" Width="300" Background="{StaticResource Panel}"
-                BorderBrush="#2A2A2A" BorderThickness="1,0,0,0" Visibility="Collapsed">
+        <Border x:Name="PlaylistPanel" Grid.Column="1" Width="300" Background="{DynamicResource Panel}"
+                BorderBrush="{DynamicResource Border}" BorderThickness="1,0,0,0" Visibility="Collapsed">
             <DockPanel>
                 <DockPanel DockPanel.Dock="Top" Margin="12,8,6,8">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
@@ -201,7 +205,7 @@
                         <Button Style="{StaticResource IconButton}" Content="&#xE738;" ToolTip="Remove selected (Del)" Click="RemoveSelected_Click"/>
                         <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="Clear playlist" Click="ClearPlaylist_Click"/>
                     </StackPanel>
-                    <TextBlock x:Name="PlaylistHeader" Text="Playlist" Foreground="{StaticResource Fg}"
+                    <TextBlock x:Name="PlaylistHeader" Text="Playlist" Foreground="{DynamicResource Fg}"
                                FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </DockPanel>
                 <ListBox x:Name="PlaylistBox" Background="Transparent" BorderThickness="0" SelectionMode="Extended"
@@ -209,7 +213,7 @@
                          AllowDrop="True" Drop="Playlist_Drop" MouseDoubleClick="Playlist_DoubleClick">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
-                            <Setter Property="Foreground" Value="{StaticResource Fg}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
                             <Setter Property="Padding" Value="8,6"/>
                             <Setter Property="Template">
                                 <Setter.Value>
@@ -219,10 +223,10 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="Bd" Property="Background" Value="#18FFFFFF"/>
+                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ItemHover}"/>
                                             </Trigger>
                                             <Trigger Property="IsSelected" Value="True">
-                                                <Setter TargetName="Bd" Property="Background" Value="#38FFFFFF"/>
+                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Selected}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -238,11 +242,11 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <!-- A frame from the video or the cover art; an icon until (or unless) there is one -->
-                                <Border x:Name="ThumbBox" Width="64" Height="36" Background="#262626" CornerRadius="3"
+                                <Border x:Name="ThumbBox" Width="64" Height="36" Background="{DynamicResource Tile}" CornerRadius="3"
                                         BorderThickness="1" BorderBrush="Transparent" VerticalAlignment="Center">
                                     <Grid>
                                         <TextBlock x:Name="Glyph" Text="&#xE714;" FontFamily="{StaticResource Icons}" FontSize="14"
-                                                   Foreground="{StaticResource FgDim}"
+                                                   Foreground="{DynamicResource FgDim}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                         <Image Source="{Binding Thumbnail}" Stretch="Uniform"
                                                RenderOptions.BitmapScalingMode="HighQuality"/>
@@ -251,7 +255,7 @@
                                 <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
                                     <TextBlock x:Name="Label" Text="{Binding Title}" TextTrimming="CharacterEllipsis"/>
                                     <TextBlock x:Name="DetailsText" Text="{Binding Details}" FontSize="11"
-                                               Foreground="{StaticResource FgDim}" TextTrimming="CharacterEllipsis"/>
+                                               Foreground="{DynamicResource FgDim}" TextTrimming="CharacterEllipsis"/>
                                 </StackPanel>
                             </Grid>
                             <DataTemplate.Triggers>
@@ -262,9 +266,9 @@
                                     <Setter TargetName="DetailsText" Property="Visibility" Value="Collapsed"/>
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                                    <Setter TargetName="Label" Property="Foreground" Value="{StaticResource Accent}"/>
+                                    <Setter TargetName="Label" Property="Foreground" Value="{DynamicResource Accent}"/>
                                     <Setter TargetName="Label" Property="FontWeight" Value="SemiBold"/>
-                                    <Setter TargetName="ThumbBox" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                    <Setter TargetName="ThumbBox" Property="BorderBrush" Value="{DynamicResource Accent}"/>
                                 </DataTrigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>

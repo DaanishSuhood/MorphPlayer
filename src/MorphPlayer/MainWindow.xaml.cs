@@ -74,12 +74,18 @@ public partial class MainWindow : Window
     const long PreviewResolutionMs = 1000;
     const int PreviewCacheSize = 150;
 
-    // The overlay is nearly transparent while video is on screen; otherwise it covers the
-    // native video host, which would show a gray window background.
+    // The overlay is nearly transparent while video is on screen; otherwise it is painted the theme's Stage colour,
+    // covering the native video host, which would show a gray window background.
     static readonly Brush VideoVisibleBackground = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
-    static readonly Brush NoVideoBackground = Brushes.Black;
 
-    readonly AppState _state = AppState.Load();
+    // Selecting several files in Explorer and pressing Enter starts one copy of MorphPlayer per file, moments apart.
+    // Files that arrive this soon after the last are taken as part of the same selection.
+    static readonly TimeSpan OutsideOpenBurst = TimeSpan.FromSeconds(1);
+
+    readonly AppState _state;
+    readonly string[] _startArgs;             // files and links from the command line
+    readonly List<string> _earlyArgs = new(); // sent by other copies before this window was ready to play
+    DateTime _lastOutsideOpenUtc;
     readonly LibVLC _libVlc;
     readonly VlcPlayer _player;
     readonly FrameGrabber _thumbnailGrabber; // playlist thumbnails
@@ -108,7 +114,7 @@ public partial class MainWindow : Window
     PlaylistItem? _current;
     RepeatMode _repeat;
     bool _shuffle, _muted, _seeking, _updatingSeekBar, _menuOpen, _fullscreen, _playlistBeforeFullscreen, _overlayHooked;
-    bool _metadataRunning, _previewBusy, _closing;
+    bool _metadataRunning, _previewBusy, _closing, _pictureShowing;
     long? _previewWanted;
     long _previewHoverSecond = -1;
     double _previewX = double.NaN;
@@ -118,10 +124,15 @@ public partial class MainWindow : Window
     WindowState _stateBeforeFullscreen;
     Point _lastMouse;
 
-    public MainWindow()
+    internal MainWindow(AppState state, string[] args)
     {
+        _state = state;
+        _startArgs = args;
         InitializeComponent();
         TitleBarTheme.Follow(this);
+        // What's drawn over the picture has brushes of its own, whatever the theme; see Themes.
+        Overlay.Resources.MergedDictionaries.Add(Themes.OverVideo);
+        Overlay.SetResourceReference(Panel.BackgroundProperty, "Stage");
 
         // SubtitleFinder replaces LibVLC's own subtitle matching, which misses most differently named files.
         _libVlc = new LibVLC("--no-video-title-show", "--no-sub-autodetect-file");
@@ -155,11 +166,40 @@ public partial class MainWindow : Window
         Video.MediaPlayer = _player;
         DeleteCaptionFiles(); // left by a run that crashed
 
-        // Files passed on the command line ("Open with…" / drag onto the .exe).
-        var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
-        if (args.Length > 0) AddToPlaylist(ExpandPaths(args), play: true);
+        // Files passed on the command line ("Open with…" / drag onto the .exe), then any that other copies sent
+        // while this one was starting.
+        var args = _startArgs.Concat(_earlyArgs).ToArray();
+        _earlyArgs.Clear();
+        if (args.Length > 0) OpenFromOutside(args);
 
         _ = CheckForUpdatesAtStartup();
+    }
+
+    /// <summary>
+    /// MorphPlayer was started again while this window was open: comes forward and opens what that copy was given,
+    /// which is nothing if it was only started from its shortcut. See SingleInstance.
+    /// </summary>
+    internal void OpenFromAnotherCopy(string[] args)
+    {
+        if (_closing) return;
+        SingleInstance.BringToFront(this);
+        if (args.Length == 0) return;
+        if (Video.MediaPlayer == null)
+            _earlyArgs.AddRange(args); // Video_Loaded opens them
+        else
+            OpenFromOutside(args);
+    }
+
+    /// <summary>
+    /// Adds files, folders and links from the command line to the playlist and plays the first. When several
+    /// arrive moments apart, only the first plays; the rest queue up behind it instead of each cutting the last off.
+    /// </summary>
+    void OpenFromOutside(string[] args)
+    {
+        var now = DateTime.UtcNow;
+        var sameSelection = now - _lastOutsideOpenUtc < OutsideOpenBurst;
+        _lastOutsideOpenUtc = now;
+        AddToPlaylist(ExpandPaths(args), play: !sameSelection);
     }
 
     void Overlay_Loaded(object sender, RoutedEventArgs e)
@@ -174,6 +214,9 @@ public partial class MainWindow : Window
     void OnClosed(object? sender, EventArgs e)
     {
         _closing = true;
+        // First, so a copy started while this one shuts down waits to take its place instead of handing its file
+        // to a window that's going away.
+        (Application.Current as App)?.StopTakingOpens();
         _resolveCts?.Cancel();
         _uiTimer.Stop();
         RememberPosition();
@@ -1393,6 +1436,89 @@ public partial class MainWindow : Window
         Osd($"Audio device: {name}");
     }
 
+    // ---------- Theme and accent colour ----------
+
+    void AddThemeItems(ItemCollection items)
+    {
+        var match = Choice("Match Windows", Themes.ThemeId == Themes.MatchWindows,
+            () => SetTheme(Themes.MatchWindows, "Match Windows"));
+        match.ToolTip = "Dark or Light, whichever Windows is set to for apps, changing when it does";
+        items.Add(match);
+        items.Add(new Separator());
+        foreach (var theme in Themes.All)
+            items.Add(Choice(theme.Name, theme.Id == Themes.ThemeId, () => SetTheme(theme.Id, theme.Name)));
+    }
+
+    void AddAccentItems(ItemCollection items)
+    {
+        var setting = Themes.AccentSetting;
+        var isPreset = false;
+        foreach (var (name, hex) in Themes.Accents)
+        {
+            var chosen = hex.Equals(setting, StringComparison.OrdinalIgnoreCase);
+            isPreset |= chosen;
+            Themes.TryParse(hex, out var color);
+            items.Add(ColorChoice(name, color, chosen, () => SetAccent(hex, name)));
+        }
+        items.Add(new Separator());
+
+        var followsWindows = setting == Themes.WindowsAccent;
+        var windows = ColorChoice("Windows Accent", Themes.WindowsAccentColor(), followsWindows,
+            () => SetAccent(Themes.WindowsAccent, "Windows Accent"));
+        windows.ToolTip = "The accent colour chosen in Windows Settings, changing when it does";
+        items.Add(windows);
+
+        var isCustom = !isPreset && !followsWindows;
+        // Once the menu has closed: the colour dialog is modal, and the menu would otherwise stay up behind it.
+        var custom = ColorChoice("Custom…", isCustom ? Themes.Accent : null, isCustom, () => Dispatcher.InvokeAsync(PickAccent));
+        custom.ToolTip = "Any colour, from the Windows colour picker";
+        items.Add(custom);
+    }
+
+    /// <summary>A menu choice with a dot of its colour before the name; a hollow dot when there's no colour to show.</summary>
+    static MenuItem ColorChoice(string name, Color? color, bool isChecked, Action onClick)
+    {
+        var dot = new System.Windows.Shapes.Ellipse { Width = 12, Height = 12, VerticalAlignment = VerticalAlignment.Center };
+        if (color is { } fill)
+        {
+            dot.Fill = new SolidColorBrush(fill);
+        }
+        else
+        {
+            dot.StrokeThickness = 1;
+            dot.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "MenuFgDim");
+        }
+        var header = new StackPanel { Orientation = Orientation.Horizontal };
+        header.Children.Add(dot);
+        header.Children.Add(new TextBlock { Text = name, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+        var item = new MenuItem { Header = header, IsCheckable = true, IsChecked = isChecked };
+        item.Click += (_, _) => onClick();
+        return item;
+    }
+
+    void SetTheme(string id, string name)
+    {
+        _state.Theme = id;
+        _state.Save();
+        Themes.Apply(_state.Theme, _state.Accent);
+        Osd($"Theme: {name}");
+    }
+
+    void SetAccent(string accent, string name)
+    {
+        _state.Accent = accent;
+        _state.Save();
+        Themes.Apply(_state.Theme, _state.Accent);
+        Osd($"Accent colour: {name}");
+    }
+
+    void PickAccent()
+    {
+        if (ColorPicker.Pick(this, Themes.Accent) is not { } color) return;
+        var hex = Themes.ToHex(color);
+        SetAccent(hex, hex);
+    }
+
     // ---------- Menus ----------
 
     void ShowMenu(Button anchor, ContextMenu menu)
@@ -1477,6 +1603,8 @@ public partial class MainWindow : Window
         RefillMenu(AudioDeviceMenu, AddAudioDeviceItems);
         RefillMenu(StereoModeMenu, AddStereoModeItems);
         RefillMenu(QualityMenu, AddQualityItems);
+        RefillMenu(ThemeMenu, AddThemeItems);
+        RefillMenu(AccentMenu, AddAccentItems);
         RefillMenu(UpdatesMenu, AddUpdateItems);
     }
 
@@ -1519,8 +1647,14 @@ public partial class MainWindow : Window
     {
         var active = _current != null && _player.State is VLCState.Opening or VLCState.Buffering or VLCState.Playing or VLCState.Paused;
         var hasVideo = active && _player.VideoTrackCount > 0;
-        var background = hasVideo ? VideoVisibleBackground : NoVideoBackground;
-        if (Overlay.Background != background) Overlay.Background = background;
+        if (hasVideo != _pictureShowing)
+        {
+            _pictureShowing = hasVideo;
+            if (hasVideo)
+                Overlay.Background = VideoVisibleBackground;
+            else
+                Overlay.SetResourceReference(Panel.BackgroundProperty, "Stage"); // follows the theme
+        }
         AudioInfo.Visibility = active && !hasVideo && _player.State != VLCState.Opening ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -1767,7 +1901,7 @@ public partial class MainWindow : Window
         _shuffle = !_shuffle;
         _shuffleRound.Clear();
         if (_current != null) _shuffleRound.Add(_current);
-        ShuffleButton.Foreground = (Brush)FindResource(_shuffle ? "Accent" : "Fg");
+        ShuffleButton.SetResourceReference(ForegroundProperty, _shuffle ? "Accent" : "Fg"); // follows the theme
         Osd(_shuffle ? "Shuffle on" : "Shuffle off");
     }
 
@@ -1775,7 +1909,7 @@ public partial class MainWindow : Window
     {
         _repeat = (RepeatMode)(((int)_repeat + 1) % 3);
         RepeatButton.Content = _repeat == RepeatMode.One ? "\uE8ED" : "\uE8EE";
-        RepeatButton.Foreground = (Brush)FindResource(_repeat == RepeatMode.Off ? "Fg" : "Accent");
+        RepeatButton.SetResourceReference(ForegroundProperty, _repeat == RepeatMode.Off ? "Fg" : "Accent");
         var text = _repeat switch { RepeatMode.All => "all", RepeatMode.One => "one", _ => "off" };
         RepeatButton.ToolTip = $"Repeat: {text}";
         Osd($"Repeat: {text}");
