@@ -264,6 +264,11 @@ YouTube.
   all users. The uninstaller removes them.
 - Addresses that yt-dlp says it doesn't support go to LibVLC instead. Other errors, such as *This video is
   unavailable*, appear in the top-left corner.
+- **When a site limits requests** (YouTube's *Sign in to confirm you're not a bot*, or *HTTP Error 429: Too Many
+  Requests*), MorphPlayer says so instead of passing on yt-dlp's suggestion to use browser cookies. It doesn't keep
+  retrying, which tends to make the limit last longer; wait a while, often up to an hour, and try again.
+- **If a website video stops with an error while playing**, MorphPlayer asks yt-dlp about the page once more and
+  carries on from the same point, or shows why it can't.
 
 ### One window
 
@@ -400,6 +405,8 @@ Nothing else is sent.
 - **Website links play one video at a time.** A YouTube playlist link plays the video it points at, not the
   whole list. Videos that need you to be signed in, such as age-restricted ones, don't play, because
   MorphPlayer doesn't pass browser cookies to yt-dlp.
+- **YouTube sometimes limits heavy use.** After many links in a short time, or on a busy shared network or VPN,
+  YouTube may ask yt-dlp to sign in to prove it isn't a bot. Without browser cookies the only fix is to wait.
 - **Deno isn't updated by Update yt-dlp.** If YouTube links stop working even after updating yt-dlp, delete
   `%LOCALAPPDATA%\MorphPlayer\tools` and open a link again to fetch both afresh.
 - A plain `dotnet build` output is large (about 300 MB) because the LibVLC package ships x86, x64 and

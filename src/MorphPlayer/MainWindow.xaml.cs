@@ -108,6 +108,7 @@ public partial class MainWindow : Window
     CancellationTokenSource? _resolveCts;      // set while yt-dlp is asked about the web page being opened
     TaskCompletionSource<bool>? _ytDlpAnswer;  // set while asking whether to fetch yt-dlp
     (PlaylistItem Item, long TimeMs)? _restartAt; // where to carry on once a website video is reloaded at a new quality
+    PlaylistItem? _retriedAfterError;           // the website video already looked up again after a playback error
     bool _ytDlpBusy;                            // fetching or updating yt-dlp
     bool _updating;                             // downloading a new MorphPlayer
 
@@ -275,6 +276,7 @@ public partial class MainWindow : Window
         {
             _history.Add(item);
             _shuffleRound.Add(item);
+            _retriedAfterError = null; // played afresh, so a playback error may be retried again
         }
 
         // A web page goes to yt-dlp first; this runs again once it has said what plays there.
@@ -395,9 +397,16 @@ public partial class MainWindow : Window
         {
             item.PlayDirectly = true; // not a site yt-dlp knows; perhaps a stream LibVLC can open
         }
+        catch (YtDlpException e) when (e.RateLimited)
+        {
+            // yt-dlp's own message suggests passing it browser cookies, which MorphPlayer can't do.
+            if (!resolve.IsCancellationRequested)
+                Osd($"{HostOf(item.Source)} is limiting requests from this network. Wait a while and try again.", seconds: 15);
+            return;
+        }
         catch (YtDlpException e)
         {
-            if (!resolve.IsCancellationRequested) Osd($"Can't play this page: {e.Message}", seconds: 10);
+            if (!resolve.IsCancellationRequested) Osd($"Can't play this link: {e.Message}", seconds: 10);
             return;
         }
         finally
@@ -1195,6 +1204,17 @@ public partial class MainWindow : Window
 
     void OnError()
     {
+        // LibVLC doesn't say why a website's stream failed: the site may be limiting this network, or the addresses
+        // may have stopped working. Asking yt-dlp about the page once more either plays it or says why it can't.
+        // Only once, until something else is played, so a stream that keeps failing can't loop.
+        if (_current is { Stream: not null } item && NeedsYtDlp(item) && _retriedAfterError != item)
+        {
+            _retriedAfterError = item;
+            _restartAt = _player.IsSeekable && _player.Time > 0 ? (item, _player.Time) : null;
+            item.Stream = null;
+            PlayItem(item, recordHistory: false);
+            return;
+        }
         Osd($"Can't play {_current?.Display}");
         UpdatePlayButton();
         ShowControls();

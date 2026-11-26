@@ -127,7 +127,8 @@ sealed class YtDlp
         if (result.ExitCode != 0)
         {
             var error = ErrorLine(result.Error) ?? "yt-dlp could not read this page.";
-            throw new YtDlpException(error, unsupported: result.Error.Contains("Unsupported URL", StringComparison.Ordinal));
+            throw new YtDlpException(error, unsupported: result.Error.Contains("Unsupported URL", StringComparison.Ordinal),
+                                     rateLimited: IsRateLimited(result.Error));
         }
 
         try
@@ -185,6 +186,17 @@ sealed class YtDlp
         }
     }
 
+    /// <summary>
+    /// Whether the site turned yt-dlp away for asking too often: an HTTP 429, YouTube's "Sign in to confirm you're not
+    /// a bot" check, or its "session has been rate-limited". Matched loosely, as YouTube words them with either a
+    /// straight or a curly apostrophe and yt-dlp rewords them from time to time.
+    /// </summary>
+    static bool IsRateLimited(string stderr) =>
+        stderr.Contains("HTTP Error 429", StringComparison.Ordinal)
+        || stderr.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("not a bot", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("rate-limited", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>yt-dlp's last "ERROR:" line, without the prefix and the "[youtube] id:" before the message.</summary>
     static string? ErrorLine(string stderr)
     {
@@ -203,10 +215,13 @@ sealed class YtDlp
 /// <summary>One set of captions for a web video; Language is the site's code for it, such as "en" or "pt-BR".</summary>
 public sealed record WebCaption(string Label, string Url, string Language, bool Auto);
 
-sealed class YtDlpException(string message, bool unsupported = false) : Exception(message)
+sealed class YtDlpException(string message, bool unsupported = false, bool rateLimited = false) : Exception(message)
 {
     /// <summary>yt-dlp doesn't know the site, so the address may well be a plain stream LibVLC can open itself.</summary>
     public bool Unsupported { get; } = unsupported;
+
+    /// <summary>The site is limiting requests from this network for now; only waiting helps.</summary>
+    public bool RateLimited { get; } = rateLimited;
 }
 
 /// <summary>What yt-dlp found behind a web page: the stream to play, and the page's title and thumbnail.</summary>
